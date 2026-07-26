@@ -393,7 +393,7 @@ function syncSmartFactorySourceLabels(){
   const taskDescription=document.getElementById('smartFactoryTaskSourceDescription');
   document.title=cfg.identity.pageTitle;
   if(title) title.textContent=cfg.identity.dashboardTitle;
-  if(summary) summary.textContent='GitHub Pages near-live · dữ liệu nén theo tháng';
+  if(summary) summary.textContent='GitHub Pages near-live · dữ liệu nén theo tháng · hỗ trợ tổng hợp tất cả tháng';
   if(label) label.textContent='Nguồn: '+cfg.production.fileName+' · File ID: '+cfg.production.fileId+' · Sheet: '+cfg.production.sheetName+' · '+cfg.production.range+' · chỉ nhận '+cfg.identity.plantCode;
   if(taskDescription) taskDescription.textContent=cfg.identity.taskSourceDescription;
 }
@@ -411,7 +411,8 @@ const num=v=>Math.round(n(v)).toLocaleString('vi-VN');
 const dec=v=>n(v).toLocaleString('vi-VN',{maximumFractionDigits:2});
 const pct=v=>isFinite(n(v))?(n(v)*100).toLocaleString('vi-VN',{maximumFractionDigits:2})+'%':'—';
 const unique=a=>[...new Set(a.filter(x=>x!==''&&x!=null))].sort((x,y)=>String(x).localeCompare(String(y),'vi'));
-function rowObj(a){const o={}; COLS.forEach((c,i)=>o[c]=a[i]); return o;}
+function rowObjWithCols(a,cols){return Object.fromEntries(cols.map((c,i)=>[c,a[i]]));}
+function rowObj(a){return rowObjWithCols(a,COLS);}
 function showError(msg){const e=$('errorBox'); if(e){e.style.display='block';e.textContent=msg;} console.error(msg);}
 window.addEventListener('error',ev=>showError('Dashboard JS lỗi: '+ev.message+'\nDòng: '+ev.lineno));
 function setLiveStatus(msg,type){const el=$('liveLoadStatus'); if(el){el.textContent=msg; el.className='live-status '+(type||'warn');}}
@@ -666,6 +667,7 @@ function buildDataFromGviz(resp){
 }
 let STATIC_MANIFEST=null;
 let STATIC_PERIOD='';
+const STATIC_ALL_PERIODS='all';
 async function gs5StaticFetchJson(url,compressed){
   const join=url.includes('?')?'&':'?';
   const response=await fetch(url+join+'v='+Date.now(),{cache:'no-store'});
@@ -697,10 +699,84 @@ function staticPeriod(value){
 }
 async function readData(periodValue,forceManifest){
   const previousRows=Array.isArray(ROWS)?ROWS.length:0;
+  const previousSignature=STATIC_MANIFEST&&STATIC_MANIFEST.source&&STATIC_MANIFEST.source.signature;
   setLiveStatus('Đang kiểm tra phiên bản dữ liệu GS5 trên GitHub Pages…','warn');
   try{
     const manifest=await loadStaticManifest(Boolean(forceManifest));
     const wanted=periodValue||STATIC_PERIOD||manifest.latest_period;
+    if(wanted===STATIC_ALL_PERIODS){
+      const currentSignature=manifest.source&&manifest.source.signature;
+      if(
+        STATIC_PERIOD===STATIC_ALL_PERIODS &&
+        previousRows>0 &&
+        previousSignature &&
+        currentSignature===previousSignature
+      ){
+        setLiveStatus(
+          'LIVE OK — '+Number(previousRows).toLocaleString('vi-VN')+
+          ' dòng · Tất cả các tháng · nguồn '+((manifest.source&&manifest.source.modified)||manifest.generated_display),
+          'ok'
+        );
+        return STATIC_ALL_PERIODS;
+      }
+      const periods=(manifest.periods||[]).filter(item=>item.value!==STATIC_ALL_PERIODS);
+      if(!periods.length) throw new Error('Manifest chưa có phân vùng dữ liệu.');
+      let nextCols=null;
+      const nextRows=[];
+      let loadedRows=0;
+      for(let i=0;i<periods.length;i++){
+        const period=periods[i];
+        setLiveStatus(
+          'Đang tải Tất cả các tháng · '+(i+1)+'/'+periods.length+
+          ' · '+period.label+' · '+Number(period.rows||0).toLocaleString('vi-VN')+' dòng…',
+          'warn'
+        );
+        const payload=await gs5StaticFetchJson('./data/'+period.file,true);
+        if(!payload || !Array.isArray(payload.cols) || !Array.isArray(payload.rows)){
+          throw new Error('Gói dữ liệu '+period.file+' không hợp lệ.');
+        }
+        if(payload.meta && payload.meta.period!==period.value){
+          throw new Error('Gói dữ liệu sai kỳ: '+payload.meta.period+' / '+period.value);
+        }
+        if(!nextCols) nextCols=payload.cols;
+        else if(nextCols.length!==payload.cols.length || nextCols.some((col,index)=>col!==payload.cols[index])){
+          throw new Error('Cấu trúc cột không đồng nhất tại '+period.label+'.');
+        }
+        for(const rawRow of payload.rows) nextRows.push(rowObjWithCols(rawRow,nextCols));
+        loadedRows+=payload.rows.length;
+        payload.rows.length=0;
+      }
+      const global=manifest.global||{};
+      DATA={
+        meta:{
+          source:'GitHub Pages near-live · Tất cả các tháng',
+          generated:manifest.generated_display||'',
+          period:STATIC_ALL_PERIODS,
+          rows:loadedRows,
+          ltt:global.ltt||0,
+          stats:global.stats||0,
+          machines:global.machines||0,
+          operators:global.operators||0,
+          date_min:global.date_min||'',
+          date_max:global.date_max||'',
+          global_rows:global.accepted_rows||loadedRows,
+          source_modified:manifest.source&&manifest.source.modified
+        },
+        cols:nextCols,
+        rows:[]
+      };
+      COLS=nextCols;
+      RAW=[];
+      ROWS=nextRows;
+      STATIC_PERIOD=STATIC_ALL_PERIODS;
+      DATA_SOURCE='GitHub Pages near-live · Tất cả các tháng';
+      setLiveStatus(
+        'LIVE OK — '+Number(loadedRows).toLocaleString('vi-VN')+
+        ' dòng · Tất cả các tháng · nguồn '+((manifest.source&&manifest.source.modified)||manifest.generated_display),
+        'ok'
+      );
+      return STATIC_ALL_PERIODS;
+    }
     const period=(manifest.periods||[]).find(item=>item.value===wanted)
       ||(manifest.periods||[]).find(item=>item.value===manifest.latest_period)
       ||(manifest.periods||[])[0];
@@ -709,10 +785,11 @@ async function readData(periodValue,forceManifest){
     const payload=await gs5StaticFetchJson('./data/'+period.file,true);
     if(!payload || !Array.isArray(payload.cols) || !Array.isArray(payload.rows)) throw new Error('Gói dữ liệu '+period.file+' không hợp lệ.');
     if(payload.meta && payload.meta.period!==period.value) throw new Error('Gói dữ liệu sai kỳ: '+payload.meta.period+' / '+period.value);
-    DATA=payload;
-    COLS=DATA.cols;
-    RAW=DATA.rows;
-    ROWS=RAW.map(rowObj);
+    COLS=payload.cols;
+    ROWS=payload.rows.map(rowObj);
+    payload.rows.length=0;
+    DATA={meta:payload.meta||{},cols:COLS,rows:[]};
+    RAW=[];
     STATIC_PERIOD=period.value;
     DATA_SOURCE='GitHub Pages near-live · '+period.label;
     if(!DATA.meta) DATA.meta={};
@@ -1435,9 +1512,10 @@ function setupFilters(preferredPeriod){
   const periods=(STATIC_MANIFEST&&STATIC_MANIFEST.periods)||[];
   const current=preferredPeriod||STATIC_PERIOD||(STATIC_MANIFEST&&STATIC_MANIFEST.latest_period)||'';
   $('fMonth').innerHTML=periods.length
-    ?periods.map(item=>`<option value="${esc(item.value)}">${esc(item.label)} · ${num(item.rows)} dòng</option>`).join('')
+    ?`<option value="${STATIC_ALL_PERIODS}">Tất cả các tháng · ${num(globalRows)} dòng</option>`+
+      periods.map(item=>`<option value="${esc(item.value)}">${esc(item.label)} · ${num(item.rows)} dòng</option>`).join('')
     :'<option value="">Đang tải danh sách tháng…</option>';
-  if(periods.some(item=>item.value===current)) $('fMonth').value=current;
+  if(current===STATIC_ALL_PERIODS || periods.some(item=>item.value===current)) $('fMonth').value=current;
 
   function weeksForLoadedPeriod(){
     return unique(ROWS.filter(r=>r.week&&r.week!=='Không tuần').map(r=>r.week));
@@ -1445,7 +1523,8 @@ function setupFilters(preferredPeriod){
   function refillWeeks(keepCurrent=true){
     const currentWeek=keepCurrent?($('fWeek').value||'all'):'all';
     const weeks=weeksForLoadedPeriod();
-    $('fWeek').innerHTML='<option value="all">Tất cả tuần trong tháng</option>'+weeks.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+    const allWeeksLabel=$('fMonth').value===STATIC_ALL_PERIODS?'Tất cả tuần':'Tất cả tuần trong tháng';
+    $('fWeek').innerHTML='<option value="all">'+allWeeksLabel+'</option>'+weeks.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
     $('fWeek').value=weeks.includes(currentWeek)?currentWeek:'all';
   }
   $('fSegment').innerHTML='<option value="all">Tất cả mảng</option>'+unique(ROWS.map(r=>r.segment)).map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
