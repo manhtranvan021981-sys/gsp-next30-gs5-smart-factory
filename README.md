@@ -1,2 +1,42 @@
-# gsp-next30-gs5-smart-factory
-GSP NEXT30 - GS5 Smart Factory Dashboard
+# GSP NEXT30 – GS5 Smart Factory
+
+Dashboard nhà máy thông minh GS5, phát hành bằng GitHub Actions và GitHub Pages.
+
+## Kiến trúc
+
+1. Workflow kiểm tra phiên bản file `P3_Tong_Hop_LTT_2507.xlsx` trên Google Drive mỗi 15 phút, lệch khỏi đầu giờ để giảm nguy cơ GitHub xếp hàng chậm.
+2. Nếu file không đổi, workflow dừng và giữ nguyên bản dashboard đang chạy.
+3. Nếu file đổi, bộ xử lý đọc streaming sheet `P3.Tổng hợp lệnh thao tác`, vùng `A9:CT`.
+4. Chỉ các dòng có cột E bằng `GS5` được chấp nhận.
+5. Dữ liệu được chia theo tháng và nén gzip; dashboard chỉ tải một tháng mỗi lần để bảo vệ RAM.
+6. Bản dữ liệu đạt kiểm tra mới được phát hành lên GitHub Pages.
+
+## Nguồn dữ liệu cố định
+
+- File ID: `1ZCe-HgzUxoWV91JdsjSEF16rN5cn0W0e`
+- Sheet: `P3.Tổng hợp lệnh thao tác`
+- Header: dòng 9
+- Phạm vi: `A9:CT`
+- Nhà máy: `GS5`
+- Mapping điều hành: cố định theo vị trí cột, không tự dò header cho `AR/AT/BG/BI/CH`
+
+## Chạy thủ công
+
+Mở `Actions` → `Cập nhật dashboard GS5` → `Run workflow`.
+
+## Cơ chế an toàn
+
+- Không upload file Excel 148 MB vào repository.
+- Không lưu mật khẩu, cookie hoặc token Google Drive trong mã nguồn.
+- Nếu tải/xử lý/kiểm tra lỗi, workflow dừng; GitHub Pages tiếp tục giữ bản hợp lệ gần nhất.
+- `Action tuần này` chưa kết nối vì chưa có sheet `00_Task_Schedule` riêng cho GS5. Không dùng nhầm nguồn GS6.
+- Repository và dữ liệu đã xử lý là công khai theo lựa chọn phương án A.
+- GitHub tự tắt workflow theo lịch ở repository public nếu 60 ngày không có hoạt động; khi đó cần mở `Actions` và bật lại.
+
+## Chạy kiểm thử cục bộ
+
+```bash
+python scripts/process_excel.py --input P3_Tong_Hop_LTT_2507.xlsx --out site/data
+python scripts/verify_build.py --data site/data
+python -m http.server 8000 --directory site
+```
